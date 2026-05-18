@@ -6,16 +6,14 @@ const QueueSystem = require('../systems/QueueSystem');
 const { createContextLogger } = require('../utils/Logger');
 
 const log = createContextLogger('RestoreCommand');
-const SLEEP = (ms) => new Promise(r => setTimeout(r, ms));
+const SLEEP = ms => new Promise(r => setTimeout(r, ms));
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('restore')
     .setDescription('Restore a server backup to this server')
     .addStringOption(opt =>
-      opt.setName('id')
-        .setDescription('Backup ID to restore (use /backup list to see your backups)')
-        .setRequired(true)
+      opt.setName('id').setDescription('Backup ID (use /backup list to see your backups)').setRequired(true)
     )
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
@@ -33,13 +31,9 @@ module.exports = {
     }
 
     const inputId = interaction.options.getString('id');
-    const ServerBackup = require('../database/models/ServerBackup');
-    const backup = await ServerBackup.findOne({
-      backupId: { $regex: `^${inputId}`, $options: 'i' },
-      createdBy: user.id,
-    });
+    const backup = BackupSystem.getBackup(inputId);
 
-    if (!backup) {
+    if (!backup || backup.createdBy !== user.id) {
       return interaction.reply({
         embeds: [Embed.error('Backup Not Found', 'No backup found with that ID, or you do not own it.\nUse `/backup list` to see your backups.')],
         ephemeral: true,
@@ -50,11 +44,7 @@ module.exports = {
       'Confirm Restore',
       `You are about to restore backup **${backup.backupId.slice(0, 8)}...** from **${backup.guildName}**.\n\n` +
       `⚠️ This will overwrite ALL current channels and roles.\n\n` +
-      `**Backup contains:**\n` +
-      `🎭 ${backup.metadata.totalRoles} roles\n` +
-      `📚 ${backup.metadata.totalChannels} channels\n` +
-      `😀 ${backup.metadata.totalEmojis} emojis\n\n` +
-      `Proceed?`
+      `**Backup contains:**\n🎭 ${backup.metadata.totalRoles} roles\n📚 ${backup.metadata.totalChannels} channels\n😀 ${backup.metadata.totalEmojis} emojis\n\nProceed?`
     );
 
     const row = new ActionRowBuilder().addComponents(
@@ -98,11 +88,8 @@ module.exports = {
         for (const roleData of [...backup.roles].sort((a, b) => a.position - b.position)) {
           try {
             const role = await guild.roles.create({
-              name: roleData.name,
-              color: roleData.color || 0,
-              hoist: roleData.hoist,
-              mentionable: roleData.mentionable,
-              reason: 'Backup Restore',
+              name: roleData.name, color: roleData.color || 0, hoist: roleData.hoist,
+              mentionable: roleData.mentionable, reason: 'Backup Restore',
             });
             roleMap.set(roleData.originalId, role.id);
             await SLEEP(100);
@@ -111,29 +98,17 @@ module.exports = {
 
         await interaction.editReply({ embeds: [Embed.progress('Restoring', 3, 5, `Creating ${backup.categories.length} categories...`)] });
 
-        const catMap = new Map();
         for (const catData of [...backup.categories].sort((a, b) => (a.position || 0) - (b.position || 0))) {
           try {
-            const cat = await guild.channels.create({
-              name: catData.name,
-              type: ChannelType.GuildCategory,
-              position: catData.position || 0,
-              reason: 'Backup Restore',
-            });
-            catMap.set(catData.originalId, cat.id);
+            const cat = await guild.channels.create({ name: catData.name, type: ChannelType.GuildCategory, position: catData.position || 0, reason: 'Backup Restore' });
             await SLEEP(150);
 
             for (const chData of catData.channels || []) {
               try {
                 await guild.channels.create({
-                  name: chData.name,
-                  type: chData.type || ChannelType.GuildText,
-                  parent: cat.id,
-                  topic: chData.topic || '',
-                  nsfw: chData.nsfw || false,
-                  rateLimitPerUser: chData.rateLimitPerUser || 0,
-                  position: chData.position || 0,
-                  reason: 'Backup Restore',
+                  name: chData.name, type: chData.type || ChannelType.GuildText, parent: cat.id,
+                  topic: chData.topic || '', nsfw: chData.nsfw || false,
+                  rateLimitPerUser: chData.rateLimitPerUser || 0, position: chData.position || 0, reason: 'Backup Restore',
                 });
                 await SLEEP(100);
               } catch {}
@@ -157,14 +132,12 @@ module.exports = {
       }, { userId: user.id, guildId: guild.id });
 
       await interaction.editReply({
-        embeds: [Embed.success(
-          'Backup Restored!',
-          `Successfully restored backup from **${backup.guildName}**.\n\n` +
-          `🎭 Roles: ${backup.metadata.totalRoles} • 📚 Channels: ${backup.metadata.totalChannels}`
+        embeds: [Embed.success('Backup Restored!',
+          `Successfully restored backup from **${backup.guildName}**.\n\n🎭 Roles: ${backup.metadata.totalRoles} • 📚 Channels: ${backup.metadata.totalChannels}`
         )],
       });
     } catch (err) {
-      log.error('Restore failed', { error: err.message, guildId: guild.id });
+      log.error('Restore failed', { error: err.message });
       await interaction.editReply({ embeds: [Embed.error('Restore Failed', err.message)] });
     }
   },
