@@ -1,0 +1,11 @@
+node_modules/
+.env
+logs/*.log
+logs/*.gz
+dist/
+build/
+.nyc_output/
+coverage/
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
