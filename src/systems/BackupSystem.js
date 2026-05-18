@@ -1,108 +1,108 @@
+const fs = require('fs');
+const path = require('path');
 const { v4: uuidv4 } = require('uuid');
-const ServerBackup = require('../database/models/ServerBackup');
-const Guild = require('../database/models/Guild');
 const { createContextLogger } = require('../utils/Logger');
-const config = require('../config');
 
 const log = createContextLogger('BackupSystem');
+const DATA_FILE = path.join(__dirname, '../data/backups.json');
 
 class BackupSystem {
+  constructor() {
+    this._ensureFile();
+  }
+
+  _ensureFile() {
+    const dir = path.dirname(DATA_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, JSON.stringify({}), 'utf8');
+  }
+
+  _load() {
+    try {
+      return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    } catch {
+      return {};
+    }
+  }
+
+  _save(data) {
+    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2), 'utf8');
+  }
+
   async createBackup(guild, userId, options = {}) {
     log.info('Creating server backup', { guildId: guild.id, userId });
     const start = Date.now();
 
-    try {
-      const roles = this._serializeRoles(guild);
-      const { categories, channels } = this._serializeChannels(guild);
-      const emojis = await this._serializeEmojis(guild);
-      const stickers = this._serializeStickers(guild);
+    const roles = this._serializeRoles(guild);
+    const { categories, channels } = this._serializeChannels(guild);
+    const emojis = this._serializeEmojis(guild);
+    const stickers = this._serializeStickers(guild);
 
-      const backupData = {
-        backupId: uuidv4(),
-        guildId: guild.id,
-        guildName: guild.name,
-        createdBy: userId,
-        type: options.type || 'manual',
+    const backup = {
+      backupId: uuidv4(),
+      guildId: guild.id,
+      guildName: guild.name,
+      createdBy: userId,
+      type: options.type || 'manual',
+      notes: options.notes || '',
+      createdAt: new Date().toISOString(),
 
-        guild: {
-          name: guild.name,
-          description: guild.description || '',
-          icon: guild.iconURL({ dynamic: true, size: 4096 }) || null,
-          banner: guild.bannerURL({ size: 4096 }) || null,
-          splash: guild.splashURL({ size: 4096 }) || null,
-          discoverySplash: guild.discoverySplashURL({ size: 4096 }) || null,
-          verificationLevel: guild.verificationLevel,
-          defaultMessageNotifications: guild.defaultMessageNotifications,
-          explicitContentFilter: guild.explicitContentFilter,
-          preferredLocale: guild.preferredLocale,
-          afkChannelId: guild.afkChannelId,
-          afkTimeout: guild.afkTimeout,
-          systemChannelId: guild.systemChannelId,
-          systemChannelFlags: guild.systemChannelFlags?.bitfield || 0,
-          rulesChannelId: guild.rulesChannelId,
-          publicUpdatesChannelId: guild.publicUpdatesChannelId,
-          features: [...(guild.features || [])],
-          premiumTier: guild.premiumTier,
-          nsfwLevel: guild.nsfwLevel,
-        },
+      guild: {
+        name: guild.name,
+        description: guild.description || '',
+        icon: guild.iconURL({ dynamic: true, size: 4096 }) || null,
+        banner: guild.bannerURL?.({ size: 4096 }) || null,
+        verificationLevel: guild.verificationLevel,
+        defaultMessageNotifications: guild.defaultMessageNotifications,
+        explicitContentFilter: guild.explicitContentFilter,
+        preferredLocale: guild.preferredLocale,
+        afkChannelId: guild.afkChannelId,
+        afkTimeout: guild.afkTimeout,
+        systemChannelId: guild.systemChannelId,
+        features: [...(guild.features || [])],
+      },
 
-        roles,
-        categories,
-        channels,
-        emojis,
-        stickers,
+      roles,
+      categories,
+      channels,
+      emojis,
+      stickers,
 
-        metadata: {
-          totalRoles: roles.length,
-          totalChannels: channels.length + categories.reduce((acc, c) => acc + (c.channels?.length || 0), 0),
-          totalEmojis: emojis.length,
-          totalStickers: stickers.length,
-          discordVersion: '14',
-        },
+      metadata: {
+        totalRoles: roles.length,
+        totalChannels: channels.length + categories.reduce((a, c) => a + (c.channels?.length || 0), 0),
+        totalEmojis: emojis.length,
+        totalStickers: stickers.length,
+      },
+    };
 
-        expiresAt: options.expiresAt || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-        isPublic: options.isPublic || false,
-        notes: options.notes || '',
-      };
+    const all = this._load();
+    all[backup.backupId] = backup;
+    this._save(all);
 
-      const backup = await ServerBackup.create(backupData);
+    log.info('Backup created', {
+      backupId: backup.backupId,
+      guildId: guild.id,
+      duration: Date.now() - start,
+    });
 
-      await Guild.findOneAndUpdate(
-        { guildId: guild.id },
-        { $inc: { 'stats.backupsCreated': 1 }, 'stats.lastActivity': new Date() },
-        { upsert: true }
-      );
-
-      log.info('Backup created successfully', {
-        backupId: backup.backupId,
-        guildId: guild.id,
-        duration: Date.now() - start,
-        roles: roles.length,
-        channels: backupData.metadata.totalChannels,
-        emojis: emojis.length,
-      });
-
-      return backup;
-    } catch (err) {
-      log.error('Backup creation failed', { guildId: guild.id, error: err.message });
-      throw err;
-    }
+    return backup;
   }
 
   _serializeRoles(guild) {
     return guild.roles.cache
       .filter(r => !r.managed && r.name !== '@everyone')
-      .sort((a, b) => b.position - a.position)
-      .map(role => ({
-        originalId: role.id,
-        name: role.name,
-        color: role.color,
-        hoist: role.hoist,
-        mentionable: role.mentionable,
-        permissions: role.permissions.bitfield.toString(),
-        position: role.position,
-        icon: role.iconURL() || null,
-        unicodeEmoji: role.unicodeEmoji || null,
+      .sort((a, b) => a.position - b.position)
+      .map(r => ({
+        originalId: r.id,
+        name: r.name,
+        color: r.color,
+        hoist: r.hoist,
+        mentionable: r.mentionable,
+        permissions: r.permissions.bitfield.toString(),
+        position: r.position,
+        icon: r.iconURL() || null,
+        unicodeEmoji: r.unicodeEmoji || null,
       }));
   }
 
@@ -110,23 +110,23 @@ class BackupSystem {
     const categories = [];
     const orphanChannels = [];
 
-    const sortedCategories = guild.channels.cache
+    guild.channels.cache
       .filter(c => c.type === 4)
-      .sort((a, b) => a.position - b.position);
+      .sort((a, b) => a.position - b.position)
+      .forEach(cat => {
+        const children = guild.channels.cache
+          .filter(c => c.parentId === cat.id)
+          .sort((a, b) => a.position - b.position)
+          .map(ch => this._serializeChannel(ch));
 
-    for (const category of sortedCategories.values()) {
-      const children = guild.channels.cache
-        .filter(c => c.parentId === category.id)
-        .sort((a, b) => a.position - b.position);
-
-      categories.push({
-        originalId: category.id,
-        name: category.name,
-        position: category.position,
-        permissionOverwrites: this._serializePermissions(category),
-        channels: children.map(ch => this._serializeChannel(ch)),
+        categories.push({
+          originalId: cat.id,
+          name: cat.name,
+          position: cat.position,
+          permissionOverwrites: this._serializePerms(cat),
+          channels: children,
+        });
       });
-    }
 
     guild.channels.cache
       .filter(c => !c.parentId && c.type !== 4)
@@ -136,34 +136,23 @@ class BackupSystem {
     return { categories, channels: orphanChannels };
   }
 
-  _serializeChannel(channel) {
+  _serializeChannel(ch) {
     const base = {
-      originalId: channel.id,
-      name: channel.name,
-      type: channel.type,
-      position: channel.position,
-      permissionOverwrites: this._serializePermissions(channel),
+      originalId: ch.id,
+      name: ch.name,
+      type: ch.type,
+      position: ch.position,
+      permissionOverwrites: this._serializePerms(ch),
     };
-
-    if (channel.topic) base.topic = channel.topic;
-    if (channel.nsfw) base.nsfw = channel.nsfw;
-    if (channel.rateLimitPerUser) base.rateLimitPerUser = channel.rateLimitPerUser;
-    if (channel.bitrate) base.bitrate = channel.bitrate;
-    if (channel.userLimit) base.userLimit = channel.userLimit;
-    if (channel.defaultAutoArchiveDuration) base.defaultAutoArchiveDuration = channel.defaultAutoArchiveDuration;
-
-    if (channel.availableTags?.length > 0) {
-      base.availableTags = channel.availableTags.map(t => ({
-        name: t.name,
-        emoji: t.emoji?.name || null,
-        moderated: t.moderated,
-      }));
-    }
-
+    if (ch.topic) base.topic = ch.topic;
+    if (ch.nsfw) base.nsfw = ch.nsfw;
+    if (ch.rateLimitPerUser) base.rateLimitPerUser = ch.rateLimitPerUser;
+    if (ch.bitrate) base.bitrate = ch.bitrate;
+    if (ch.userLimit) base.userLimit = ch.userLimit;
     return base;
   }
 
-  _serializePermissions(channel) {
+  _serializePerms(channel) {
     if (!channel.permissionOverwrites?.cache) return [];
     return channel.permissionOverwrites.cache.map(ow => ({
       id: ow.id,
@@ -173,58 +162,59 @@ class BackupSystem {
     }));
   }
 
-  async _serializeEmojis(guild) {
-    return guild.emojis.cache.map(emoji => ({
-      originalId: emoji.id,
-      name: emoji.name,
-      imageURL: emoji.imageURL({ size: 256 }),
-      animated: emoji.animated,
-      roles: emoji.roles?.cache?.map(r => r.id) || [],
+  _serializeEmojis(guild) {
+    return guild.emojis.cache.map(e => ({
+      originalId: e.id,
+      name: e.name,
+      imageURL: e.imageURL({ size: 256 }),
+      animated: e.animated,
     }));
   }
 
   _serializeStickers(guild) {
-    return guild.stickers.cache.map(sticker => ({
-      originalId: sticker.id,
-      name: sticker.name,
-      description: sticker.description || '',
-      tags: sticker.tags || '',
-      imageURL: sticker.url,
+    return guild.stickers.cache.map(s => ({
+      originalId: s.id,
+      name: s.name,
+      description: s.description || '',
+      tags: s.tags || '',
+      imageURL: s.url,
     }));
   }
 
-  async getBackup(backupId) {
-    return ServerBackup.findOne({ backupId });
+  getBackup(backupId) {
+    const all = this._load();
+    return Object.values(all).find(b =>
+      b.backupId === backupId || b.backupId.startsWith(backupId)
+    ) || null;
   }
 
-  async getUserBackups(userId, limit = 10) {
-    return ServerBackup.find({ createdBy: userId })
-      .sort({ createdAt: -1 })
-      .limit(limit)
-      .select('backupId guildId guildName createdAt type metadata notes');
+  getUserBackups(userId, limit = 10) {
+    const all = this._load();
+    return Object.values(all)
+      .filter(b => b.createdBy === userId)
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      .slice(0, limit);
   }
 
-  async getGuildBackups(guildId, limit = 5) {
-    return ServerBackup.find({ guildId })
-      .sort({ createdAt: -1 })
-      .limit(limit)
-      .select('backupId guildId guildName createdAt type metadata notes');
-  }
-
-  async deleteBackup(backupId, userId) {
-    const backup = await ServerBackup.findOne({ backupId });
+  deleteBackup(backupId, userId) {
+    const all = this._load();
+    const backup = Object.values(all).find(b =>
+      b.backupId === backupId || b.backupId.startsWith(backupId)
+    );
     if (!backup) throw new Error('Backup not found');
     if (backup.createdBy !== userId) throw new Error('You do not own this backup');
-    await backup.deleteOne();
+    delete all[backup.backupId];
+    this._save(all);
     return true;
   }
 
   formatBackupSummary(backup) {
     const m = backup.metadata;
+    const ts = Math.floor(new Date(backup.createdAt).getTime() / 1000);
     return [
       `📦 **ID:** \`${backup.backupId.slice(0, 8)}...\``,
       `🏠 **Server:** ${backup.guildName}`,
-      `📅 **Created:** <t:${Math.floor(backup.createdAt.getTime() / 1000)}:R>`,
+      `📅 **Created:** <t:${ts}:R>`,
       `🎭 **Roles:** ${m.totalRoles} | 📚 **Channels:** ${m.totalChannels} | 😀 **Emojis:** ${m.totalEmojis}`,
     ].join('\n');
   }
