@@ -1,6 +1,5 @@
 const { ActivityType } = require('discord.js');
 const { createContextLogger } = require('../utils/Logger');
-const { connect } = require('../database/connection');
 const AIManager = require('../ai/AIManager');
 const config = require('../config');
 
@@ -19,27 +18,23 @@ module.exports = {
   once: true,
 
   async execute(client) {
-    log.info(`Bot is online`, {
+    log.info('Bot is online', {
       tag: client.user.tag,
       id: client.user.id,
       guilds: client.guilds.cache.size,
     });
-
-    await connect();
 
     const health = await AIManager.healthCheck();
     log.info('AI provider health check', health);
 
     let activityIndex = 0;
     const setActivity = () => {
-      const activity = ACTIVITIES[activityIndex % ACTIVITIES.length];
-      client.user.setActivity(activity.name, { type: activity.type });
+      const a = ACTIVITIES[activityIndex % ACTIVITIES.length];
+      client.user.setActivity(a.name, { type: a.type });
       activityIndex++;
     };
-
     setActivity();
     setInterval(setActivity, 30000);
-
     client.user.setStatus('online');
 
     log.info('Bot fully initialized', {
@@ -49,8 +44,6 @@ module.exports = {
       groq: health.groq ? 'online' : 'offline',
     });
 
-    if (config.isDev) {
-      log.info('Running in development mode');
-    }
+    if (config.isDev) log.info('Running in development mode');
   },
 };
