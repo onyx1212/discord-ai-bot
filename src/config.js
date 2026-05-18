@@ -27,16 +27,6 @@ const config = {
     maxRetries: parseInt(process.env.AI_MAX_RETRIES) || 3,
   },
 
-  database: {
-    uri: process.env.MONGODB_URI || 'mongodb://localhost:27017/discord-ai-bot',
-    dbName: process.env.MONGODB_DB_NAME || 'discord-ai-bot',
-    options: {
-      maxPoolSize: 10,
-      serverSelectionTimeoutMS: 5000,
-      socketTimeoutMS: 45000,
-    },
-  },
-
   rateLimit: {
     points: parseInt(process.env.RATE_LIMIT_POINTS) || 5,
     duration: parseInt(process.env.RATE_LIMIT_DURATION) || 60,
@@ -54,7 +44,6 @@ const config = {
   performance: {
     queueConcurrency: parseInt(process.env.QUEUE_CONCURRENCY) || 3,
     cacheTtl: parseInt(process.env.CACHE_TTL) || 300,
-    maxBackupSizeMb: parseInt(process.env.MAX_BACKUP_SIZE_MB) || 50,
   },
 
   environment: process.env.ENVIRONMENT || 'development',
@@ -75,29 +64,21 @@ const config = {
     maxRoles: 250,
     maxChannels: 500,
     maxEmojis: 100,
-    maxStickers: 60,
-    maxCategories: 50,
     cloneTimeout: 300000,
     generateTimeout: 120000,
   },
 };
 
-function validate() {
+config.validate = function () {
   const required = [
     ['discord.token', config.discord.token],
     ['discord.clientId', config.discord.clientId],
   ];
-
   const missing = required.filter(([, val]) => !val).map(([key]) => key);
-  if (missing.length > 0) {
-    throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
-  }
-
+  if (missing.length > 0) throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
   if (!config.ai.openrouter.apiKey && !config.ai.groq.apiKey) {
     throw new Error('At least one AI provider API key is required (OPENROUTER_API_KEY or GROQ_API_KEY)');
   }
-}
-
-config.validate = validate;
+};
 
 module.exports = config;
