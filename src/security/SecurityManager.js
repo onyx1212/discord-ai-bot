@@ -1,32 +1,22 @@
-const config = require('../config');
 const { createContextLogger } = require('../utils/Logger');
-const User = require('../database/models/User');
+const config = require('../config');
 
 const log = createContextLogger('Security');
+
+const bannedUsers = new Set();
 
 class SecurityManager {
   constructor() {
     this.suspiciousActivity = new Map();
-    this.blockedIps = new Set();
     this.MAX_SUSPICIOUS_SCORE = 100;
-    this.SUSPICIOUS_DECAY_MS = 60 * 1000;
-
-    setInterval(() => this._decayScores(), this.SUSPICIOUS_DECAY_MS);
+    setInterval(() => this._decayScores(), 60 * 1000);
   }
 
   async checkUser(userId) {
     if (!userId) return { allowed: false, reason: 'No user ID' };
 
-    try {
-      const user = await User.findOne({ userId });
-      if (user?.isBanned()) {
-        return {
-          allowed: false,
-          reason: `You are banned from using this bot. Reason: ${user.banReason || 'No reason provided'}`,
-        };
-      }
-    } catch (err) {
-      log.error('Failed to check user ban status', { userId, error: err.message });
+    if (bannedUsers.has(userId)) {
+      return { allowed: false, reason: 'You are banned from using this bot.' };
     }
 
     const score = this.suspiciousActivity.get(userId);
@@ -41,19 +31,10 @@ class SecurityManager {
   async checkPermissions(interaction, requiredPermissions = []) {
     const { member, guild } = interaction;
     if (!member || !guild) return { allowed: false, reason: 'Must be used in a server' };
-
     if (requiredPermissions.length === 0) return { allowed: true };
 
-    const memberPerms = member.permissions;
-    const missing = requiredPermissions.filter(perm => !memberPerms.has(perm));
-
-    if (missing.length > 0) {
-      return {
-        allowed: false,
-        reason: `You are missing permissions: **${missing.join(', ')}**`,
-      };
-    }
-
+    const missing = requiredPermissions.filter(perm => !member.permissions.has(perm));
+    if (missing.length > 0) return { allowed: false, reason: `You are missing permissions: **${missing.join(', ')}**` };
     return { allowed: true };
   }
 
@@ -62,13 +43,7 @@ class SecurityManager {
     if (!botMember) return { allowed: false, reason: 'Could not find bot in server' };
 
     const missing = requiredPermissions.filter(perm => !botMember.permissions.has(perm));
-    if (missing.length > 0) {
-      return {
-        allowed: false,
-        reason: `I am missing permissions: **${missing.join(', ')}**. Please grant me these permissions and try again.`,
-      };
-    }
-
+    if (missing.length > 0) return { allowed: false, reason: `I am missing permissions: **${missing.join(', ')}**` };
     return { allowed: true };
   }
 
@@ -76,41 +51,18 @@ class SecurityManager {
     return userId === config.discord.ownerId;
   }
 
-  async isAdmin(userId, guild) {
-    try {
-      const member = await guild.members.fetch(userId);
-      return member.permissions.has('Administrator');
-    } catch {
-      return false;
-    }
-  }
-
   flagSuspicious(userId, points = 10, reason = 'unknown') {
-    const current = this.suspiciousActivity.get(userId) || { points: 0, reasons: [], firstAt: Date.now() };
+    const current = this.suspiciousActivity.get(userId) || { points: 0, reasons: [], lastAt: Date.now() };
     current.points += points;
     current.reasons.push(reason);
     current.lastAt = Date.now();
     this.suspiciousActivity.set(userId, current);
-
-    if (current.points >= this.MAX_SUSPICIOUS_SCORE) {
-      log.warn('User exceeded suspicious activity threshold', { userId, points: current.points, reasons: current.reasons });
-    }
   }
 
   sanitizeInput(input, options = {}) {
     if (!input || typeof input !== 'string') return '';
-    let clean = input;
-
-    if (!options.allowMarkdown) {
-      clean = clean.replace(/[*_`~|\\]/g, '\\$&');
-    }
-
-    clean = clean.replace(/\u0000/g, '').replace(/[\u200B-\u200D\uFEFF]/g, '');
-
-    if (options.maxLength) {
-      clean = clean.slice(0, options.maxLength);
-    }
-
+    let clean = input.replace(/\u0000/g, '').replace(/[\u200B-\u200D\uFEFF]/g, '');
+    if (options.maxLength) clean = clean.slice(0, options.maxLength);
     return clean.trim();
   }
 
@@ -123,35 +75,16 @@ class SecurityManager {
     if (!text) return text;
     return text
       .replace(/(sk-[a-zA-Z0-9]{20,})/g, '[REDACTED_KEY]')
-      .replace(/(Bearer [a-zA-Z0-9._-]{20,})/g, 'Bearer [REDACTED]')
-      .replace(/(api[_-]?key[=:]\s*)[a-zA-Z0-9_-]+/gi, '$1[REDACTED]');
-  }
-
-  validateGuildManageable(guild) {
-    const botMember = guild.members.me;
-    if (!botMember) return { valid: false, reason: 'Bot is not in the server' };
-
-    const highestBotRole = botMember.roles.highest;
-    const everyonePosition = guild.roles.everyone.position;
-
-    if (highestBotRole.position <= everyonePosition) {
-      return { valid: false, reason: 'Bot has no roles above @everyone — cannot manage the server' };
-    }
-
-    return { valid: true };
+      .replace(/(Bearer [a-zA-Z0-9._-]{20,})/g, 'Bearer [REDACTED]');
   }
 
   _decayScores() {
     const now = Date.now();
     for (const [userId, data] of this.suspiciousActivity.entries()) {
-      const age = now - data.lastAt;
-      if (age > 5 * 60 * 1000) {
+      if (now - data.lastAt > 5 * 60 * 1000) {
         data.points = Math.max(0, data.points - 20);
-        if (data.points === 0) {
-          this.suspiciousActivity.delete(userId);
-        } else {
-          this.suspiciousActivity.set(userId, data);
-        }
+        if (data.points === 0) this.suspiciousActivity.delete(userId);
+        else this.suspiciousActivity.set(userId, data);
       }
     }
   }
