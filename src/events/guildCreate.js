@@ -1,5 +1,4 @@
 const { createContextLogger } = require('../utils/Logger');
-const Guild = require('../database/models/Guild');
 const Embed = require('../utils/EmbedBuilder');
 const config = require('../config');
 
@@ -14,19 +13,11 @@ module.exports = {
       guildId: guild.id,
       guildName: guild.name,
       memberCount: guild.memberCount,
-      ownerId: guild.ownerId,
     });
-
-    try {
-      await Guild.getOrCreate(guild.id, guild.name);
-    } catch (err) {
-      log.error('Failed to create guild record', { guildId: guild.id, error: err.message });
-    }
 
     try {
       const systemChannel = guild.systemChannel;
       if (!systemChannel) return;
-
       const canSend = systemChannel.permissionsFor(guild.members.me)?.has('SendMessages');
       if (!canSend) return;
 
@@ -34,7 +25,7 @@ module.exports = {
         color: config.colors.primary,
         title: '👋 Thanks for adding Discord AI Bot!',
         description:
-          '**Enterprise-grade server management powered by AI.**\n\n' +
+          '**Enterprise server management powered by AI.**\n\n' +
           '🔄 **`/clone`** — Clone any Discord server structure\n' +
           '✨ **`/generate`** — Generate a server with AI from a text prompt\n' +
           '📦 **`/backup`** — Create and manage server backups\n' +
@@ -43,7 +34,6 @@ module.exports = {
           '📖 **`/help`** — Full command reference\n\n' +
           '*All commands require Administrator permission.*',
       });
-      embed.setFooter({ text: `Use /help to get started • ${config.discord.supportServer}` });
 
       await systemChannel.send({ embeds: [embed] });
     } catch (err) {
